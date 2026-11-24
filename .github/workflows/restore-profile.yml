@@ -1,0 +1,45 @@
+name: Restore profile
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full 40-character commit SHA from main history
+        required: true
+        type: string
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: restore-profile
+  cancel-in-progress: false
+jobs:
+  restore:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch main history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Open a restoration pull request
+        env:
+          REVISION: ${{ inputs.revision }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REVISION" =~ ^[0-9a-fA-F]{40}$ ]] || { echo 'Enter a full commit SHA'; exit 1; }
+          git cat-file -e "$REVISION^{commit}"
+          git merge-base --is-ancestor "$REVISION" HEAD || { echo 'Commit must belong to main history'; exit 1; }
+          git cat-file -e "$REVISION:PROFILE.md"
+          git restore --source="$REVISION" --staged --worktree -- PROFILE.md
+          if git diff --cached --quiet; then
+            echo 'Profile already matches the requested version'
+            exit 0
+          fi
+          branch="restore/profile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "$branch"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Restore PROFILE.md to $REVISION"
+          git push origin "HEAD:refs/heads/$branch"
+          gh pr create --base main --head "$branch" --title "Restore profile to ${REVISION:0:12}" --body "Restores PROFILE.md from $REVISION. Review the diff before merging."
